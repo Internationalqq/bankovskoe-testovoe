@@ -23,6 +23,7 @@ func databaseURL() string {
 }
 
 func main() {
+	// Ага
 	ctx := context.Background()
 
 	db, err := storage.Connect(ctx, databaseURL())
