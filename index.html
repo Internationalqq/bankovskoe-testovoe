@@ -1,0 +1,655 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Payment Console</title>
+  <link rel="icon" type="image/png" href="/bank.png">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          boxShadow: {
+            soft: "0 18px 60px rgba(15, 23, 42, 0.12)",
+            glow: "0 0 0 1px rgba(14, 165, 233, 0.16), 0 24px 70px rgba(14, 165, 233, 0.18)",
+            panel: "0 24px 80px rgba(2, 132, 199, 0.20)"
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    .drawer-open { transform: translateX(0); }
+    .drawer-closed { transform: translateX(110%); }
+    .fade-in { animation: fadeIn 220ms ease-out both; }
+    .slide-up { animation: slideUp 260ms ease-out both; }
+    .slide-in { animation: slideIn 220ms ease-out both; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateX(10px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-[#edf3f8] text-slate-950">
+  <main class="relative min-h-screen overflow-hidden">
+    <div class="absolute inset-x-0 top-0 h-72 bg-[linear-gradient(135deg,#0f766e_0%,#0284c7_48%,#312e81_100%)]"></div>
+    <div class="absolute left-8 top-8 h-28 w-28 rounded-full bg-white/10 blur-2xl"></div>
+    <div class="absolute right-20 top-24 h-32 w-32 rounded-full bg-cyan-200/20 blur-2xl"></div>
+
+    <section class="relative mx-auto grid min-h-screen w-full max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_420px] lg:px-8">
+      <div class="flex flex-col justify-center space-y-5">
+        <header class="mb-3 flex flex-wrap items-center justify-between gap-4 text-white">
+          <div>
+            <p class="text-sm font-semibold uppercase tracking-wider text-cyan-100">Acquiring sandbox</p>
+            <h1 class="mt-2 text-3xl font-semibold sm:text-4xl">Платежный кабинет</h1>
+            <p class="mt-3 max-w-2xl text-sm leading-6 text-sky-50/85">Фронтенд для тестирования локального Go-бэкенда, идемпотентности и маршрутизации платежей.</p>
+          </div>
+
+          <div class="flex gap-3">
+            <button id="openBanksButton" type="button" class="rounded-lg border border-white/25 bg-white/15 px-4 py-3 text-sm font-semibold text-white shadow-sm backdrop-blur transition hover:bg-white/20 active:bg-white/25">
+              Банки
+            </button>
+            <div class="hidden rounded-lg border border-white/20 bg-white/15 px-4 py-3 shadow-sm backdrop-blur sm:block">
+              <p class="text-xs text-sky-100">Endpoint</p>
+              <p class="mt-1 font-mono text-sm font-semibold text-white">POST :8090/pay</p>
+            </div>
+          </div>
+        </header>
+
+        <div class="grid gap-5 xl:grid-cols-[minmax(0,1.08fr)_minmax(320px,0.92fr)]">
+          <form id="paymentForm" class="rounded-lg border border-white/70 bg-white/95 p-5 shadow-glow backdrop-blur">
+            <div class="mb-6 flex items-start justify-between gap-4">
+              <div>
+                <h2 class="text-xl font-semibold">Новый платеж</h2>
+                <p class="mt-1 text-sm text-slate-500">Отправка запроса с ключом идемпотентности.</p>
+              </div>
+              <span id="statusPill" class="rounded-md bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">READY</span>
+            </div>
+
+            <label class="block">
+              <span class="text-sm font-medium text-slate-700">Сумма платежа</span>
+              <div class="mt-2 flex overflow-hidden rounded-lg border border-slate-300 bg-white focus-within:border-sky-500 focus-within:ring-4 focus-within:ring-sky-100">
+                <input id="amountInput" type="number" min="1" step="1" value="1000" class="w-full border-0 px-4 py-3 text-lg font-semibold outline-none" placeholder="1000">
+                <span class="flex items-center border-l border-slate-200 bg-slate-50 px-4 text-sm font-semibold text-slate-500">RUB</span>
+              </div>
+            </label>
+
+            <label class="mt-5 block">
+              <span class="text-sm font-medium text-slate-700">ID операции (X-Idempotency-Key)</span>
+              <div class="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]">
+                <input id="idempotencyInput" type="text" class="min-w-0 rounded-lg border border-slate-300 px-4 py-3 font-mono text-sm outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-100" placeholder="Нажми генерацию UUID">
+                <button id="generateUuidButton" type="button" class="rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100">
+                  Сгенерировать UUID
+                </button>
+              </div>
+            </label>
+
+            <div class="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div class="mb-3 flex items-center justify-between gap-3">
+                <p class="text-sm font-semibold text-slate-800">Маршрут по UI</p>
+                <button id="openBanksInlineButton" type="button" class="rounded-md bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-100">
+                  Список банков
+                </button>
+              </div>
+              <div id="routePreview" class="rounded-lg border border-slate-200 bg-white px-4 py-3"></div>
+            </div>
+
+            <button id="payButton" type="submit" class="mt-6 flex w-full items-center justify-center rounded-lg bg-sky-600 px-5 py-3 text-base font-semibold text-white shadow-sm transition hover:bg-sky-700 active:bg-sky-800 disabled:cursor-not-allowed disabled:bg-slate-400">
+              Оплатить
+            </button>
+          </form>
+
+          <section class="rounded-lg border border-white/70 bg-white p-5 shadow-soft">
+            <h2 class="text-xl font-semibold">Текущий запрос</h2>
+            <dl class="mt-5 space-y-4">
+              <div class="flex items-center justify-between gap-4 border-b border-slate-100 pb-3">
+                <dt class="text-sm text-slate-500">Метод</dt>
+                <dd class="font-mono text-sm font-semibold">POST</dd>
+              </div>
+              <div class="flex items-center justify-between gap-4 border-b border-slate-100 pb-3">
+                <dt class="text-sm text-slate-500">Адрес</dt>
+                <dd class="font-mono text-sm font-semibold">localhost:8090/pay</dd>
+              </div>
+              <div class="flex items-center justify-between gap-4 border-b border-slate-100 pb-3">
+                <dt class="text-sm text-slate-500">Header</dt>
+                <dd class="font-mono text-sm font-semibold">X-Idempotency-Key</dd>
+              </div>
+            </dl>
+
+            <div class="mt-5 rounded-lg bg-slate-950 p-4 text-sm text-slate-100">
+              <p class="text-slate-400">Payload preview</p>
+              <pre id="payloadPreview" class="mt-2 whitespace-pre-wrap break-words font-mono text-xs"></pre>
+            </div>
+          </section>
+        </div>
+
+        <section class="rounded-lg border border-white/70 bg-white p-5 shadow-soft">
+          <div class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
+            <div>
+              <h2 class="text-xl font-semibold">История платежей</h2>
+              <p class="mt-1 text-sm text-slate-500">Загрузка списка с бэкенда через GET /payments.</p>
+            </div>
+            <button id="refreshPaymentsButton" type="button" class="rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 active:bg-slate-700">
+              Обновить список
+            </button>
+          </div>
+
+          <div class="mt-4 overflow-hidden rounded-lg border border-slate-200">
+            <div class="overflow-x-auto">
+              <table class="w-full min-w-[720px] text-left">
+                <thead class="bg-slate-50">
+                  <tr class="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    <th class="px-4 py-3">ID</th>
+                    <th class="px-4 py-3">Сумма</th>
+                    <th class="px-4 py-3">Idempotency Key</th>
+                    <th class="px-4 py-3 text-right">Статус</th>
+                  </tr>
+                </thead>
+                <tbody id="paymentsTableBody" class="divide-y divide-slate-100 text-sm">
+                  <tr>
+                    <td colspan="4" class="px-4 py-8 text-center text-slate-400">Нажми “Обновить список”, чтобы загрузить платежи.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <aside class="flex max-h-[calc(100vh-3rem)] min-h-[560px] flex-col rounded-lg border border-slate-800 bg-slate-950 shadow-soft lg:sticky lg:top-6">
+        <div class="flex items-center justify-between gap-3 border-b border-slate-800 px-5 py-4">
+          <div>
+            <h2 class="text-lg font-semibold text-white">Логи ответов</h2>
+            <p class="mt-1 text-sm text-slate-400">Клики, статусы и ответы Go-бэкенда.</p>
+          </div>
+          <button id="clearLogsButton" type="button" class="rounded-md border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-200 transition hover:bg-slate-900">
+            Очистить
+          </button>
+        </div>
+        <div id="logsContainer" class="flex-1 space-y-3 overflow-y-auto p-4">
+          <div class="rounded-lg border border-slate-800 bg-slate-900 px-4 py-3 text-sm text-slate-400">
+            Логи появятся после первого запроса.
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <div id="drawerOverlay" class="pointer-events-none fixed inset-0 z-40 bg-slate-950/0 transition duration-300"></div>
+    <aside id="banksDrawer" class="drawer-closed fixed right-4 top-4 z-50 flex h-[calc(100vh-2rem)] w-[min(440px,calc(100vw-2rem))] flex-col rounded-lg border border-white/20 bg-white shadow-panel transition duration-300 ease-out">
+      <div class="flex items-start justify-between gap-4 border-b border-slate-200 p-5">
+        <div>
+          <p class="text-sm font-semibold uppercase tracking-wider text-sky-600">Routing</p>
+          <h2 class="mt-1 text-2xl font-semibold">Список банков</h2>
+          <p class="mt-2 text-sm leading-6 text-slate-500">Это локальная UI-модель для наглядности. Бэкенд все равно решает сам.</p>
+        </div>
+        <button id="closeBanksButton" type="button" class="grid h-10 w-10 place-items-center rounded-lg border border-slate-200 text-xl leading-none text-slate-500 transition hover:bg-slate-100 hover:text-slate-950" aria-label="Закрыть список банков">
+          ×
+        </button>
+      </div>
+
+      <div class="border-b border-slate-200 bg-slate-50 px-5 py-4">
+        <div class="grid grid-cols-3 gap-3 text-center">
+          <div class="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+            <p id="banksTotal" class="text-xl font-semibold">0</p>
+            <p class="mt-1 text-xs text-slate-500">всего</p>
+          </div>
+          <div class="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+            <p id="banksAvailable" class="text-xl font-semibold text-emerald-700">0</p>
+            <p class="mt-1 text-xs text-slate-500">доступны</p>
+          </div>
+          <div class="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+            <p id="banksSuitable" class="text-xl font-semibold text-sky-700">0</p>
+            <p class="mt-1 text-xs text-slate-500">подходят</p>
+          </div>
+        </div>
+      </div>
+
+      <div id="banksList" class="flex-1 space-y-3 overflow-y-auto p-5"></div>
+    </aside>
+  </main>
+
+  <script>
+    const endpoint = "http://localhost:8090/pay";
+    const paymentsEndpoint = "http://localhost:8090/payments";
+    const banksEndpoint = "http://localhost:8090/banks";
+    let banks = [];
+
+    const amountInput = document.getElementById("amountInput");
+    const idempotencyInput = document.getElementById("idempotencyInput");
+    const generateUuidButton = document.getElementById("generateUuidButton");
+    const paymentForm = document.getElementById("paymentForm");
+    const payButton = document.getElementById("payButton");
+    const logsContainer = document.getElementById("logsContainer");
+    const clearLogsButton = document.getElementById("clearLogsButton");
+    const payloadPreview = document.getElementById("payloadPreview");
+    const statusPill = document.getElementById("statusPill");
+    const routePreview = document.getElementById("routePreview");
+    const openBanksButton = document.getElementById("openBanksButton");
+    const openBanksInlineButton = document.getElementById("openBanksInlineButton");
+    const closeBanksButton = document.getElementById("closeBanksButton");
+    const banksDrawer = document.getElementById("banksDrawer");
+    const drawerOverlay = document.getElementById("drawerOverlay");
+    const banksList = document.getElementById("banksList");
+    const banksTotal = document.getElementById("banksTotal");
+    const banksAvailable = document.getElementById("banksAvailable");
+    const banksSuitable = document.getElementById("banksSuitable");
+    const paymentsTableBody = document.getElementById("paymentsTableBody");
+    const refreshPaymentsButton = document.getElementById("refreshPaymentsButton");
+
+    function generateUUID() {
+      if (window.crypto && typeof window.crypto.randomUUID === "function") {
+        return window.crypto.randomUUID();
+      }
+
+      return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, function (char) {
+        return (Number(char) ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> Number(char) / 4).toString(16);
+      });
+    }
+
+    function formatTime(date) {
+      return date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    }
+
+    function formatMoney(value) {
+      return new Intl.NumberFormat("ru-RU").format(Number(value || 0));
+    }
+
+    function normalizePayment(row) {
+      return {
+        id: row.ID ?? row.id ?? row.Id ?? "-",
+        amount: row.Amount ?? row.amount ?? row.Sum ?? row.sum ?? 0,
+        key: row.IdempotencyKey ?? row.idempotencyKey ?? row.Key ?? row.key ?? "-",
+        status: row.Status ?? row.status ?? "UNKNOWN"
+      };
+    }
+
+    function normalizeBank(row) {
+      const name = row.name ?? row.BankName ?? row.bankName ?? row.id ?? "unknown_bank";
+
+      return {
+        name,
+        title: row.title ?? row.Title ?? name,
+        currencies: row.currencies ?? row.Currencies ?? [],
+        min: row.min ?? row.MinSum ?? row.minSum ?? 0,
+        max: row.max ?? row.MaxSum ?? row.maxSum ?? 0,
+        commission: row.commission ?? row.Commission ?? 0,
+        available: row.available ?? row.Available ?? false,
+        behavior: row.behavior ?? row.Behavior ?? "backend"
+      };
+    }
+
+    function isBankSuitable(bank) {
+      const amount = Number(amountInput.value || 0);
+      return bank.available && bank.currencies.includes("RUB") && amount >= bank.min && amount <= bank.max;
+    }
+
+    function selectBankPreview() {
+      return banks
+        .filter(isBankSuitable)
+        .sort(function (a, b) { return a.commission - b.commission; })[0] || null;
+    }
+
+    function behaviorLabel(behavior) {
+      const labels = {
+        success: "успех",
+        technical_error: "тех. ошибка",
+        declined: "отказ",
+        pending: "ожидание",
+        backend: "с бэка"
+      };
+      return labels[behavior] || behavior;
+    }
+
+    function behaviorClasses(behavior) {
+      const classes = {
+        success: "bg-emerald-100 text-emerald-700",
+        technical_error: "bg-red-100 text-red-700",
+        declined: "bg-amber-100 text-amber-700",
+        pending: "bg-sky-100 text-sky-700",
+        backend: "bg-indigo-100 text-indigo-700"
+      };
+      return classes[behavior] || "bg-slate-100 text-slate-700";
+    }
+
+    function statusClasses(status) {
+      const normalized = String(status || "").toUpperCase();
+      if (normalized.includes("SUCCESS") || normalized.includes("SUCCEEDED")) return "bg-emerald-100 text-emerald-700";
+      if (normalized.includes("DECLINED")) return "bg-amber-100 text-amber-700";
+      if (normalized.includes("PENDING")) return "bg-sky-100 text-sky-700";
+      if (normalized.includes("FAILED") || normalized.includes("ERROR")) return "bg-red-100 text-red-700";
+      return "bg-slate-100 text-slate-700";
+    }
+
+    function renderRoutePreview() {
+      const bank = selectBankPreview();
+
+      if (!bank) {
+        routePreview.innerHTML = `
+          <div class="flex items-start gap-3">
+            <div class="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-red-100 text-sm font-bold text-red-700">!</div>
+            <div>
+              <p class="font-semibold">Подходящий банк не найден</p>
+              <p class="mt-1 text-sm text-slate-500">Проверь сумму, валюту или доступность банков.</p>
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      routePreview.innerHTML = `
+        <div class="flex items-start justify-between gap-4">
+          <div class="flex items-start gap-3">
+            <div class="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-sky-100 text-sm font-bold text-sky-700">${bank.title.slice(0, 2).toUpperCase()}</div>
+            <div>
+              <p class="font-semibold">${bank.title}</p>
+              <p class="mt-1 text-sm text-slate-500">${bank.name} · комиссия ${bank.commission}%</p>
+            </div>
+          </div>
+          <span class="rounded-md px-2.5 py-1 text-xs font-semibold ${behaviorClasses(bank.behavior)}">${behaviorLabel(bank.behavior)}</span>
+        </div>
+      `;
+    }
+
+    function renderBanks() {
+      const selected = selectBankPreview();
+      const suitableCount = banks.filter(isBankSuitable).length;
+      banksTotal.textContent = String(banks.length);
+      banksAvailable.textContent = String(banks.filter(function (bank) { return bank.available; }).length);
+      banksSuitable.textContent = String(suitableCount);
+
+      if (!banks.length) {
+        banksList.innerHTML = `
+          <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+            Банки еще не загружены с бэкенда.
+          </div>
+        `;
+        return;
+      }
+
+      banksList.innerHTML = banks.map(function (bank) {
+        const suitable = isBankSuitable(bank);
+        const selectedClasses = selected && selected.name === bank.name ? "border-sky-400 bg-sky-50" : "border-slate-200 bg-white";
+        const availabilityClasses = bank.available ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600";
+        const suitableClasses = suitable ? "bg-sky-100 text-sky-700" : "bg-slate-100 text-slate-500";
+
+        return `
+          <article class="slide-in rounded-lg border ${selectedClasses} p-4">
+            <div class="flex items-start justify-between gap-4">
+              <div class="flex min-w-0 items-start gap-3">
+                <div class="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-slate-950 text-sm font-bold text-white">${bank.title.slice(0, 2).toUpperCase()}</div>
+                <div class="min-w-0">
+                  <h3 class="truncate font-semibold">${bank.title}</h3>
+                  <p class="mt-1 font-mono text-xs text-slate-500">${bank.name}</p>
+                </div>
+              </div>
+              <span class="rounded-md px-2.5 py-1 text-xs font-semibold ${behaviorClasses(bank.behavior)}">${behaviorLabel(bank.behavior)}</span>
+            </div>
+            <div class="mt-4 grid grid-cols-2 gap-2 text-sm">
+              <div class="rounded-md bg-slate-50 p-3">
+                <p class="text-xs text-slate-500">Комиссия</p>
+                <p class="mt-1 font-semibold">${bank.commission}%</p>
+              </div>
+              <div class="rounded-md bg-slate-50 p-3">
+                <p class="text-xs text-slate-500">Лимит</p>
+                <p class="mt-1 font-semibold">${formatMoney(bank.min)}-${formatMoney(bank.max)}</p>
+              </div>
+            </div>
+            <div class="mt-3 flex flex-wrap gap-2">
+              ${bank.currencies.map(function (currency) {
+                return `<span class="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">${currency}</span>`;
+              }).join("")}
+            </div>
+            <div class="mt-4 flex flex-wrap gap-2">
+              <span class="rounded-md px-2.5 py-1 text-xs font-semibold ${availabilityClasses}">${bank.available ? "доступен" : "недоступен"}</span>
+              <span class="rounded-md px-2.5 py-1 text-xs font-semibold ${suitableClasses}">${suitable ? "подходит" : "не подходит"}</span>
+              ${selected && selected.name === bank.name ? '<span class="rounded-md bg-slate-950 px-2.5 py-1 text-xs font-semibold text-white">будет выбран</span>' : ""}
+            </div>
+          </article>
+        `;
+      }).join("");
+    }
+
+    function updatePayloadPreview() {
+      payloadPreview.textContent = JSON.stringify({ amount: Number(amountInput.value || 0) }, null, 2);
+      renderRoutePreview();
+      renderBanks();
+    }
+
+    function getLogClasses(text, isError) {
+      if (isError) return "border-red-500/40 bg-red-950/40 text-red-100";
+      if (text.includes("[ИДЕМПОТЕНТНЫЙ ПОВТОР]")) return "border-purple-500/40 bg-purple-950/35 text-purple-100";
+      if (text.includes("[ПЕРВЫЙ ЗАПРОС]")) return "border-emerald-500/40 bg-emerald-950/40 text-emerald-100";
+      if (text.includes("[ПОВТОРНЫЙ ЗАПРОС]")) return "border-amber-500/40 bg-amber-950/40 text-amber-100";
+      return "border-sky-500/30 bg-sky-950/30 text-sky-100";
+    }
+
+    function addLog(message, options = {}) {
+      const emptyLog = logsContainer.querySelector(".text-slate-400");
+      if (emptyLog) emptyLog.remove();
+
+      const entry = document.createElement("div");
+      entry.className = `fade-in rounded-lg border px-4 py-3 text-sm ${getLogClasses(message, options.isError)}`;
+      entry.innerHTML = `
+        <div class="mb-2 font-mono text-xs opacity-80">${formatTime(new Date())}</div>
+        <pre class="whitespace-pre-wrap break-words font-mono text-xs leading-5"></pre>
+      `;
+      entry.querySelector("pre").textContent = message;
+      logsContainer.prepend(entry);
+    }
+
+    function setStatusPill(label, classes) {
+      statusPill.textContent = label;
+      statusPill.className = `rounded-md px-3 py-1 text-xs font-semibold ${classes}`;
+    }
+
+    function openDrawer() {
+      drawerOverlay.className = "fixed inset-0 z-40 bg-slate-950/35 transition duration-300";
+      banksDrawer.classList.remove("drawer-closed");
+      banksDrawer.classList.add("drawer-open");
+    }
+
+    function closeDrawer() {
+      drawerOverlay.className = "pointer-events-none fixed inset-0 z-40 bg-slate-950/0 transition duration-300";
+      banksDrawer.classList.remove("drawer-open");
+      banksDrawer.classList.add("drawer-closed");
+    }
+
+    async function sendPayment() {
+      const amount = Number(amountInput.value);
+      const idempotencyKey = idempotencyInput.value.trim();
+
+      if (!amount || amount <= 0) {
+        addLog("Ошибка: сумма платежа должна быть больше нуля.", { isError: true });
+        return;
+      }
+
+      if (!idempotencyKey) {
+        addLog("Ошибка: укажи X-Idempotency-Key или сгенерируй UUID.", { isError: true });
+        return;
+      }
+
+      payButton.disabled = true;
+      setStatusPill("PROCESSING", "bg-yellow-100 text-yellow-700");
+
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Idempotency-Key": idempotencyKey
+          },
+          body: JSON.stringify({ amount })
+        });
+
+        const contentType = response.headers.get("content-type") || "";
+        const rawBody = contentType.includes("application/json")
+          ? await response.json()
+          : await response.text();
+        const body = typeof rawBody === "string" ? rawBody : JSON.stringify(rawBody, null, 2);
+        const selected = selectBankPreview();
+        const isIdempotent = response.headers.get("X-Idempotency-Processed") === "true";
+        const idempotencyMarker = isIdempotent ? "[ИДЕМПОТЕНТНЫЙ ПОВТОР]" : "";
+
+        addLog([
+          `HTTP ${response.status} ${response.statusText} ${idempotencyMarker}`.trim(),
+          `Key: ${idempotencyKey}`,
+          `UI route: ${selected ? selected.name : "not_found"}`,
+          body || "(empty response)"
+        ].join("\n"), { isError: !response.ok && !isIdempotent });
+
+        const resultStatus = typeof rawBody === "object" && rawBody !== null
+          ? String(rawBody.status || rawBody.Status || "").toUpperCase()
+          : "";
+
+        if (resultStatus === "SUCCESS" || resultStatus === "SUCCEEDED") {
+          localStorage.removeItem("my_payment_key");
+          setStatusPill("SUCCESS", "bg-emerald-100 text-emerald-700");
+        } else if (resultStatus === "DECLINED") {
+          setStatusPill("DECLINED", "bg-amber-100 text-amber-700");
+        } else if (resultStatus === "PENDING") {
+          setStatusPill("PENDING", "bg-sky-100 text-sky-700");
+        } else if (response.ok) {
+          setStatusPill(isIdempotent ? "REPLAY" : "DONE", isIdempotent ? "bg-purple-100 text-purple-700" : "bg-emerald-100 text-emerald-700");
+        } else {
+          setStatusPill("FAILED", "bg-red-100 text-red-700");
+        }
+
+        loadAllPayments(false);
+      } catch (error) {
+        addLog(`Ошибка связи с Go-сервером\nKey: ${idempotencyKey}\n${error.message}`, { isError: true });
+        setStatusPill("READY", "bg-slate-100 text-slate-600");
+      } finally {
+        payButton.disabled = false;
+      }
+    }
+
+    async function loadBanks(showLog = false) {
+      banksList.innerHTML = `
+        <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+          Загружаю банки с бэкенда...
+        </div>
+      `;
+
+      try {
+        const response = await fetch(banksEndpoint);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        const rows = Array.isArray(data) ? data : (data.banks || data.items || []);
+        banks = rows.map(normalizeBank);
+        updatePayloadPreview();
+
+        if (showLog) {
+          addLog(`GET /banks\nЗагружено банков: ${banks.length}`);
+        }
+      } catch (error) {
+        banks = [];
+        updatePayloadPreview();
+        banksList.innerHTML = `
+          <div class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-600">
+            Не удалось загрузить банки: ${error.message}
+          </div>
+        `;
+        addLog(`Ошибка загрузки банков\n${error.message}`, { isError: true });
+      }
+    }
+
+    async function loadAllPayments(showLog = true) {
+      refreshPaymentsButton.disabled = true;
+      refreshPaymentsButton.textContent = "Обновляю...";
+      paymentsTableBody.innerHTML = '<tr><td colspan="4" class="px-4 py-8 text-center text-slate-400">Загружаю платежи...</td></tr>';
+
+      try {
+        const response = await fetch(paymentsEndpoint);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        const payments = Array.isArray(data) ? data : (data.payments || data.items || []);
+
+        if (!payments.length) {
+          paymentsTableBody.innerHTML = '<tr><td colspan="4" class="px-4 py-8 text-center text-slate-400">Платежей пока нет.</td></tr>';
+          if (showLog) addLog("GET /payments\nСписок пуст.");
+          return;
+        }
+
+        paymentsTableBody.innerHTML = payments.map(function (item) {
+          const payment = normalizePayment(item);
+          return `
+            <tr class="transition hover:bg-slate-50">
+              <td class="px-4 py-3 font-mono text-xs text-slate-500">#${payment.id}</td>
+              <td class="px-4 py-3 font-semibold">${formatMoney(payment.amount)} RUB</td>
+              <td class="max-w-[260px] truncate px-4 py-3 font-mono text-xs text-slate-500" title="${payment.key}">${payment.key}</td>
+              <td class="px-4 py-3 text-right">
+                <span class="inline-flex rounded-md px-2.5 py-1 text-xs font-semibold ${statusClasses(payment.status)}">${payment.status}</span>
+              </td>
+            </tr>
+          `;
+        }).join("");
+
+        if (showLog) addLog(`GET /payments\nЗагружено платежей: ${payments.length}`);
+      } catch (error) {
+        paymentsTableBody.innerHTML = `
+          <tr>
+            <td colspan="4" class="px-4 py-8 text-center text-red-500">Не удалось загрузить список: ${error.message}</td>
+          </tr>
+        `;
+        addLog(`Ошибка обновления списка платежей\n${error.message}`, { isError: true });
+      } finally {
+        refreshPaymentsButton.disabled = false;
+        refreshPaymentsButton.textContent = "Обновить список";
+      }
+    }
+
+    generateUuidButton.addEventListener("click", function () {
+      idempotencyInput.value = generateUUID();
+      updatePayloadPreview();
+    });
+
+    clearLogsButton.addEventListener("click", function () {
+      logsContainer.innerHTML = '<div class="rounded-lg border border-slate-800 bg-slate-900 px-4 py-3 text-sm text-slate-400">Логи появятся после первого запроса.</div>';
+    });
+
+    paymentForm.addEventListener("submit", function (event) {
+      event.preventDefault();
+      sendPayment();
+    });
+
+    refreshPaymentsButton.addEventListener("click", function () {
+      loadAllPayments(true);
+    });
+
+    openBanksButton.addEventListener("click", function () {
+      openDrawer();
+      loadBanks(true);
+    });
+    openBanksInlineButton.addEventListener("click", function () {
+      openDrawer();
+      loadBanks(true);
+    });
+    closeBanksButton.addEventListener("click", closeDrawer);
+    drawerOverlay.addEventListener("click", closeDrawer);
+    amountInput.addEventListener("input", updatePayloadPreview);
+    idempotencyInput.addEventListener("input", updatePayloadPreview);
+
+    idempotencyInput.value = generateUUID();
+    updatePayloadPreview();
+    loadBanks(false);
+  </script>
+</body>
+</html>
