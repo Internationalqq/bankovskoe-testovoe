@@ -1,14 +1,21 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/segmentio/kafka-go"
 )
+
+const kafkaTopic = "payment_events"
 
 // Структура банка (Эквайера)
 type Acquirer struct {
@@ -87,6 +94,105 @@ type PaymentRequest struct {
 type PaymentResponse struct {
 	ID     int    `json:"id"`
 	Status string `json:"status"` // READY, PROCESSING, SUCCESS, FAILED
+}
+
+type PaymentEvent struct {
+	ID             int       `json:"id"`
+	IdempotencyKey string    `json:"idempotency_key"`
+	Amount         int       `json:"amount"`
+	Status         string    `json:"status"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+func kafkaBrokers() []string {
+	raw := strings.TrimSpace(os.Getenv("KAFKA_BROKERS"))
+	if raw == "" {
+		return []string{"localhost:9092"}
+	}
+
+	parts := strings.Split(raw, ",")
+	brokers := make([]string, 0, len(parts))
+	for _, part := range parts {
+		broker := strings.TrimSpace(part)
+		if broker != "" {
+			brokers = append(brokers, broker)
+		}
+	}
+	if len(brokers) == 0 {
+		return []string{"localhost:9092"}
+	}
+
+	return brokers
+}
+
+func publishPaymentEvent(ctx context.Context, payment Payment) {
+	value, err := json.Marshal(PaymentEvent{
+		ID:             payment.ID,
+		IdempotencyKey: payment.IdempotencyKey,
+		Amount:         payment.Amount,
+		Status:         payment.Status,
+		CreatedAt:      time.Now(),
+	})
+	if err != nil {
+		log.Printf("[kafka] marshal payment event error: %v", err)
+		return
+	}
+
+	writer := &kafka.Writer{
+		Addr:     kafka.TCP(kafkaBrokers()...),
+		Topic:    kafkaTopic,
+		Balancer: &kafka.LeastBytes{},
+	}
+	defer writer.Close()
+
+	kafkaCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	err = writer.WriteMessages(kafkaCtx, kafka.Message{
+		Key:   []byte(strconv.Itoa(payment.ID)),
+		Value: value,
+	})
+	if err != nil {
+		log.Printf("[kafka] publish payment event error: %v", err)
+		return
+	}
+
+	log.Printf("[kafka] published payment event: %s", value)
+}
+
+func startKafkaListener(ctx context.Context) {
+	reader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:  kafkaBrokers(),
+		Topic:    kafkaTopic,
+		GroupID:  "bankovskoe-payment-listener",
+		MinBytes: 1,
+		MaxBytes: 10e6,
+	})
+
+	go func() {
+		defer reader.Close()
+		log.Printf("[kafka] listener started: topic=%s brokers=%s", kafkaTopic, strings.Join(kafkaBrokers(), ","))
+
+		for {
+			message, err := reader.ReadMessage(ctx)
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				log.Printf("[kafka] listener read error: %v", err)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+
+			log.Printf("[kafka] received topic=%s partition=%d offset=%d key=%s value=%s",
+				message.Topic,
+				message.Partition,
+				message.Offset,
+				string(message.Key),
+				string(message.Value),
+			)
+		}
+	}()
 }
 
 // Функция, которая выбирает банки по сумме и минимальной комиссии
@@ -169,7 +275,9 @@ func payHandler(w http.ResponseWriter, r *http.Request) {
 	banks := getSortedAcquirers(req.Amount)
 	if len(banks) == 0 {
 		// Если банков нет, сразу переводим платеж в FAILED
+		currentPayment.Status = "FAILED"
 		paymentsDB[len(paymentsDB)-1].Status = "FAILED"
+		publishPaymentEvent(r.Context(), currentPayment)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(PaymentResponse{ID: currentPayment.ID, Status: "FAILED"})
 		return
@@ -219,6 +327,8 @@ func payHandler(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	currentPayment.Status = finalStatus
+	publishPaymentEvent(r.Context(), currentPayment)
 
 	// Выводим текущее состояние "базы" в консоль для проверки
 	fmt.Printf("=> ПЛАТЕЖИ В БАЗЕ: %v\n", paymentsDB)
@@ -359,6 +469,8 @@ func getBanksHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	startKafkaListener(context.Background())
+
 	http.HandleFunc("/pay", payHandler)                  // Регистрируем наш обработчик на URL /pays
 	http.HandleFunc("/payment/status", getStatusHandler) // Добавили эту строчку!
 	http.HandleFunc("/payments", getPaymentsHandler)
