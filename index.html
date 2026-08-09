@@ -64,7 +64,7 @@
             </button>
             <div class="hidden rounded-lg border border-white/20 bg-white/15 px-4 py-3 shadow-sm backdrop-blur sm:block">
               <p class="text-xs text-sky-100">Endpoint</p>
-              <p class="mt-1 font-mono text-sm font-semibold text-white">POST :8090/pay</p>
+              <p class="mt-1 font-mono text-sm font-semibold text-white">POST :8090/payments</p>
             </div>
           </div>
         </header>
@@ -121,7 +121,7 @@
               </div>
               <div class="flex items-center justify-between gap-4 border-b border-slate-100 pb-3">
                 <dt class="text-sm text-slate-500">Адрес</dt>
-                <dd class="font-mono text-sm font-semibold">localhost:8090/pay</dd>
+                <dd class="font-mono text-sm font-semibold">localhost:8090/payments</dd>
               </div>
               <div class="flex items-center justify-between gap-4 border-b border-slate-100 pb-3">
                 <dt class="text-sm text-slate-500">Header</dt>
@@ -139,11 +139,11 @@
         <section class="rounded-lg border border-white/70 bg-white p-5 shadow-soft">
           <div class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
             <div>
-              <h2 class="text-xl font-semibold">История платежей</h2>
-              <p class="mt-1 text-sm text-slate-500">Загрузка списка с бэкенда через GET /payments.</p>
+              <h2 class="text-xl font-semibold">Текущий платеж</h2>
+              <p class="mt-1 text-sm text-slate-500">Получение состояния через GET /payments/{id}.</p>
             </div>
             <button id="refreshPaymentsButton" type="button" class="rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 active:bg-slate-700">
-              Обновить список
+              Получить платеж
             </button>
           </div>
 
@@ -160,7 +160,7 @@
                 </thead>
                 <tbody id="paymentsTableBody" class="divide-y divide-slate-100 text-sm">
                   <tr>
-                    <td colspan="4" class="px-4 py-8 text-center text-slate-400">Нажми “Обновить список”, чтобы загрузить платежи.</td>
+                    <td colspan="4" class="px-4 py-8 text-center text-slate-400">Создай платеж, чтобы получить его состояние по ID.</td>
                   </tr>
                 </tbody>
               </table>
@@ -222,10 +222,40 @@
   </main>
 
   <script>
-    const endpoint = "http://localhost:8090/pay";
-    const paymentsEndpoint = "http://localhost:8090/payments";
-    const banksEndpoint = "http://localhost:8090/banks";
-    let banks = [];
+    const endpoint = "http://localhost:8090/payments";
+    let banks = [
+      {
+        name: "alfa",
+        title: "АО «Альфа-Банк»",
+        currencies: ["RUB", "USD"],
+        min: 1,
+        max: 10000,
+        commission: 1,
+        available: true,
+        behavior: "success"
+      },
+      {
+        name: "sber",
+        title: "ПАО «Сбербанк»",
+        currencies: ["RUB"],
+        min: 1,
+        max: 7000,
+        commission: 2,
+        available: true,
+        behavior: "technical_error"
+      },
+      {
+        name: "tbank",
+        title: "АО «Т-Банк»",
+        currencies: ["RUB", "EUR"],
+        min: 100,
+        max: 15000,
+        commission: 3,
+        available: true,
+        behavior: "declined"
+      }
+    ];
+    let lastPaymentId = null;
 
     const amountInput = document.getElementById("amountInput");
     const idempotencyInput = document.getElementById("idempotencyInput");
@@ -271,7 +301,7 @@
       return {
         id: row.ID ?? row.id ?? row.Id ?? "-",
         amount: row.Amount ?? row.amount ?? row.Sum ?? row.sum ?? 0,
-        key: row.IdempotencyKey ?? row.idempotencyKey ?? row.Key ?? row.key ?? "-",
+        key: row.IdempotencyKey ?? row.idempotency_key ?? row.idempotencyKey ?? row.Key ?? row.key ?? "-",
         status: row.Status ?? row.status ?? "UNKNOWN"
       };
     }
@@ -527,7 +557,13 @@
           setStatusPill("FAILED", "bg-red-100 text-red-700");
         }
 
-        loadAllPayments(false);
+        const createdPaymentId = typeof rawBody === "object" && rawBody !== null
+          ? rawBody.id ?? rawBody.ID
+          : null;
+        if (createdPaymentId) {
+          lastPaymentId = createdPaymentId;
+          loadPaymentById(lastPaymentId, false);
+        }
       } catch (error) {
         addLog(`Ошибка связи с Go-сервером\nKey: ${idempotencyKey}\n${error.message}`, { isError: true });
         setStatusPill("READY", "bg-slate-100 text-slate-600");
@@ -536,84 +572,56 @@
       }
     }
 
-    async function loadBanks(showLog = false) {
-      banksList.innerHTML = `
-        <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-          Загружаю банки с бэкенда...
-        </div>
-      `;
-
-      try {
-        const response = await fetch(banksEndpoint);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status} ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        const rows = Array.isArray(data) ? data : (data.banks || data.items || []);
-        banks = rows.map(normalizeBank);
-        updatePayloadPreview();
-
-        if (showLog) {
-          addLog(`GET /banks\nЗагружено банков: ${banks.length}`);
-        }
-      } catch (error) {
-        banks = [];
-        updatePayloadPreview();
-        banksList.innerHTML = `
-          <div class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-600">
-            Не удалось загрузить банки: ${error.message}
-          </div>
-        `;
-        addLog(`Ошибка загрузки банков\n${error.message}`, { isError: true });
+    function loadBanks(showLog = false) {
+      updatePayloadPreview();
+      if (showLog) {
+        addLog(`Локальная модель банков\nБанков: ${banks.length}`);
       }
     }
 
-    async function loadAllPayments(showLog = true) {
+    async function loadPaymentById(paymentId, showLog = true) {
+      if (!paymentId) {
+        addLog("Сначала создай платеж, чтобы появился ID для GET /payments/{id}.", { isError: true });
+        return;
+      }
+
       refreshPaymentsButton.disabled = true;
-      refreshPaymentsButton.textContent = "Обновляю...";
-      paymentsTableBody.innerHTML = '<tr><td colspan="4" class="px-4 py-8 text-center text-slate-400">Загружаю платежи...</td></tr>';
+      refreshPaymentsButton.textContent = "Получаю...";
+      paymentsTableBody.innerHTML = '<tr><td colspan="4" class="px-4 py-8 text-center text-slate-400">Загружаю платеж...</td></tr>';
 
       try {
-        const response = await fetch(paymentsEndpoint);
+        const response = await fetch(`${endpoint}/${paymentId}`);
         if (!response.ok) {
           throw new Error(`HTTP ${response.status} ${response.statusText}`);
         }
 
         const data = await response.json();
-        const payments = Array.isArray(data) ? data : (data.payments || data.items || []);
+        const payment = normalizePayment(data);
+        const attempts = data.attempts ?? data.Attempts ?? [];
 
-        if (!payments.length) {
-          paymentsTableBody.innerHTML = '<tr><td colspan="4" class="px-4 py-8 text-center text-slate-400">Платежей пока нет.</td></tr>';
-          if (showLog) addLog("GET /payments\nСписок пуст.");
-          return;
-        }
+        paymentsTableBody.innerHTML = `
+          <tr class="transition hover:bg-slate-50">
+            <td class="px-4 py-3 font-mono text-xs text-slate-500">#${payment.id}</td>
+            <td class="px-4 py-3 font-semibold">${formatMoney(payment.amount)} RUB</td>
+            <td class="max-w-[260px] truncate px-4 py-3 font-mono text-xs text-slate-500" title="${payment.key}">${payment.key}</td>
+            <td class="px-4 py-3 text-right">
+              <span class="inline-flex rounded-md px-2.5 py-1 text-xs font-semibold ${statusClasses(payment.status)}">${payment.status}</span>
+              <span class="ml-2 text-xs text-slate-400">${attempts.length} attempts</span>
+            </td>
+          </tr>
+        `;
 
-        paymentsTableBody.innerHTML = payments.map(function (item) {
-          const payment = normalizePayment(item);
-          return `
-            <tr class="transition hover:bg-slate-50">
-              <td class="px-4 py-3 font-mono text-xs text-slate-500">#${payment.id}</td>
-              <td class="px-4 py-3 font-semibold">${formatMoney(payment.amount)} RUB</td>
-              <td class="max-w-[260px] truncate px-4 py-3 font-mono text-xs text-slate-500" title="${payment.key}">${payment.key}</td>
-              <td class="px-4 py-3 text-right">
-                <span class="inline-flex rounded-md px-2.5 py-1 text-xs font-semibold ${statusClasses(payment.status)}">${payment.status}</span>
-              </td>
-            </tr>
-          `;
-        }).join("");
-
-        if (showLog) addLog(`GET /payments\nЗагружено платежей: ${payments.length}`);
+        if (showLog) addLog(`GET /payments/${paymentId}\n${JSON.stringify(data, null, 2)}`);
       } catch (error) {
         paymentsTableBody.innerHTML = `
           <tr>
-            <td colspan="4" class="px-4 py-8 text-center text-red-500">Не удалось загрузить список: ${error.message}</td>
+            <td colspan="4" class="px-4 py-8 text-center text-red-500">Не удалось загрузить платеж: ${error.message}</td>
           </tr>
         `;
-        addLog(`Ошибка обновления списка платежей\n${error.message}`, { isError: true });
+        addLog(`Ошибка получения платежа\nGET /payments/${paymentId}\n${error.message}`, { isError: true });
       } finally {
         refreshPaymentsButton.disabled = false;
-        refreshPaymentsButton.textContent = "Обновить список";
+        refreshPaymentsButton.textContent = "Получить платеж";
       }
     }
 
@@ -632,7 +640,7 @@
     });
 
     refreshPaymentsButton.addEventListener("click", function () {
-      loadAllPayments(true);
+      loadPaymentById(lastPaymentId, true);
     });
 
     openBanksButton.addEventListener("click", function () {

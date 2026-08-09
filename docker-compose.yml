@@ -1,4 +1,22 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bankovskoe-postgres
+    environment:
+      POSTGRES_DB: bankovskoe
+      POSTGRES_USER: bankovskoe
+      POSTGRES_PASSWORD: bankovskoe
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bankovskoe -d bankovskoe"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   zookeeper:
     image: confluentinc/cp-zookeeper:7.3.0
     container_name: bankovskoe-zookeeper
@@ -37,3 +55,22 @@ services:
     environment:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bankovskoe-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgres://bankovskoe:bankovskoe@postgres:5432/bankovskoe?sslmode=disable
+      KAFKA_BROKERS: kafka:29092
+    ports:
+      - "8090:8090"
+
+volumes:
+  postgres-data:
